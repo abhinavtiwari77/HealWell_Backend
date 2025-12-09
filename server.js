@@ -8,6 +8,7 @@ const userRoutes = require('./routes/userRoutes');
 const communityRoutes = require('./routes/communityRoutes');
 const commentRoutes = require('./routes/CommentRoutes');
 const messageRoutes = require('./routes/messageRoutes');
+const uploadRoutes = require('./routes/uploadRoutes');
 
 const app = express();
 
@@ -22,6 +23,7 @@ app.use('/api/user',userRoutes);
 app.use('/api/communities', communityRoutes);
 app.use('/api', commentRoutes);
 app.use('/api/messages', messageRoutes);
+app.use('/api/upload', uploadRoutes);
 
 app.get('/',(req,res)=> res.send("Wellness api running"));
 
