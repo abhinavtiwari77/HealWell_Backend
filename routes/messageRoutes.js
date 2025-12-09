@@ -3,6 +3,9 @@ const router = express.Router();
 const messageController = require('../controllers/messageController');
 const authMiddleware = require('../middleware/authMiddleware');
 
+const { writeLimiter } = require('../middleware/rateLimiter');
+router.post('/conversations/:conversationId/messages', authMiddleware, writeLimiter, messageController.sendMessage);
+
 router.post('/conversations', authMiddleware, messageController.createConversation);
 router.get('/conversations', authMiddleware, messageController.listConversations);
 
