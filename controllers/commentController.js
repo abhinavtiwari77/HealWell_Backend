@@ -72,7 +72,7 @@ exports.deleteComment = async (req, res) => {
       return res.status(403).json({ msg: 'Not allowed to delete this comment' });
     }
 
-    await comment.remove();
+    await comment.deleteOne();
 
     await Post.findByIdAndUpdate(comment.post, { $inc: { commentsCount: -1 } });
 

@@ -22,6 +22,8 @@ async function uploadFilesToCloudinary(files = []) {
   return uploaded;
 }
 
+const Notification = require("../models/Notification");
+
 exports.createPost = async (req, res) => {
   try {
     let { content, mediaUrl, community } = req.body;
@@ -58,6 +60,62 @@ exports.createPost = async (req, res) => {
     });
 
     await post.populate("author", "name profilePicUrl");
+
+    // NOTIFICATION LOGIC
+    try {
+      const authorId = req.user.id;
+      // Find all users who follow this author
+      // Since User model has 'followers' array, we can fetch the user and populate followers 
+      // OR just query Users where 'following' includes authorId (if that field exists and is maintained)
+      // The User model has 'followers' array which contains ObjectIds of followers.
+
+      const author = await User.findById(authorId);
+      if (author && author.followers && author.followers.length > 0) {
+        const notifications = author.followers.map(followerId => ({
+          recipient: followerId,
+          sender: authorId,
+          type: 'new_post',
+          post: post._id,
+          isRead: false
+        }));
+
+        if (notifications.length > 0) {
+          const inserted = await Notification.insertMany(notifications);
+
+          // Emit socket events
+          const io = req.app.locals.io;
+          if (io) {
+            inserted.forEach(notif => {
+              // We emit to the specific user's room or socket if we track it.
+              // Server tracks onlineUsers by userId -> socketId.
+              // But standard practice is to join user to a room named after their ID? 
+              // Looking at server.js, onlineUsers is a Map.
+              // We can emit to specific socket ID if online.
+
+              // However, simpler pattern often used is `io.to(userId).emit` if we have rooms setup.
+              // server.js doesn't seem to join users to 'userId' room automatically on connection, 
+              // BUT it does have `onlineUsers`.
+
+              // Let's modify server.js to join user to their own room, OR use the map.
+              // Accessing Map from here via app.locals is possible if we exposed the Map?
+              // `app.locals.io` is exposed. `onlineUsers` map is NOT exposed.
+
+              // Best bet: Emit a general event and let client filter? No, inefficient.
+              // Let's update server.js later to join user room.
+              // For now, I'll assumme I can iterate or just emit to all (bad).
+              // Wait, I can loop through onlineUsers if I expose it.
+
+              // Actually, I should update server.js first to make sure I can target users efficiently.
+              // But for now, let's just put the logic here assuming I WILL fix server.js to join `userId` room.
+              io.to(notif.recipient.toString()).emit('newNotification', notif);
+            });
+          }
+        }
+      }
+    } catch (notifError) {
+      console.error("Error creating notifications:", notifError);
+      // Don't fail the post creation if notifications fail
+    }
 
     return res.status(201).json({ post });
   } catch (err) {
@@ -151,7 +209,7 @@ exports.deletePost = async (req, res) => {
       }
     }
 
-    await post.remove();
+    await post.deleteOne();
     return res.json({ msg: 'Post Deleted' });
   } catch (err) {
     console.error('deletePost error', err);
@@ -164,10 +222,11 @@ exports.getFeed = async (req, res) => {
     const page = Math.max(1, parseInt(req.query.page || '1', 10));
     const limit = Math.min(50, parseInt(req.query.limit || '10', 10));
     const skip = (page - 1) * limit;
-    const { community } = req.query;
+    const { community, author } = req.query;
 
     const filter = {};
     if (community) filter.community = community;
+    if (author) filter.author = author;
 
     const posts = await Post.find(filter)
       .sort({ createdAt: -1 })

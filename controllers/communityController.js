@@ -75,11 +75,26 @@ exports.getCommunity = async (req, res) => {
   try {
     const idOrSlug = req.params.identifier;
     const query = mongooseIdPattern(idOrSlug) ? { _id: idOrSlug } : { slug: idOrSlug };
-    const community = await Community.findOne(query).populate('members', 'name profilePicUrl').lean();
+    const community = await Community.findOne(query)
+      .populate('members', 'name profilePicUrl')
+      .populate('admins', 'name profilePicUrl')
+      .populate('pendingRequests', 'name profilePicUrl')
+      .lean();
     if (!community) return res.status(404).json({ msg: 'Community not found' });
-    if (!req.user || !community.admins.map(a => a.toString()).includes(req.user.id)) {
+
+    // Hide pending requests from non-admins
+    if (!req.user) {
       delete community.pendingRequests;
+    } else {
+      const isAdmin = community.admins.some(a => {
+        const adminId = typeof a === 'string' ? a : a._id;
+        return adminId.toString() === req.user.id;
+      });
+      if (!isAdmin) {
+        delete community.pendingRequests;
+      }
     }
+
     return res.json({ community });
   } catch (err) {
     console.error('getCommunity error', err);
@@ -136,7 +151,7 @@ exports.leaveCommunity = async (req, res) => {
     }
 
     community.members = community.members.filter(m => m.toString() !== me);
-    
+
     community.admins = community.admins.filter(a => a.toString() !== me);
     await community.save();
 
@@ -239,10 +254,53 @@ exports.deleteCommunity = async (req, res) => {
       return res.status(403).json({ msg: 'Only community admins can delete' });
     }
 
-    await community.remove();
+    await community.deleteOne();
     return res.json({ msg: 'Community deleted' });
   } catch (err) {
     console.error('deleteCommunity error', err);
+    return res.status(500).json({ msg: 'Server error' });
+  }
+};
+
+exports.removeMember = async (req, res) => {
+  try {
+    const { id, userId } = req.params;
+    const community = await Community.findById(id);
+    if (!community) return res.status(404).json({ msg: 'Community not found' });
+
+    if (!community.admins.some(a => a.toString() === req.user.id)) {
+      return res.status(403).json({ msg: 'Only admins can remove members' });
+    }
+
+    if (userId === req.user.id) {
+      return res.status(400).json({ msg: 'Cannot remove yourself (use leave)' });
+    }
+
+    community.members = community.members.filter(m => m.toString() !== userId);
+    community.admins = community.admins.filter(a => a.toString() !== userId);
+    await community.save();
+
+    return res.json({ msg: 'Member removed' });
+  } catch (err) {
+    console.error('removeMember error', err);
+    return res.status(500).json({ msg: 'Server error' });
+  }
+};
+
+exports.getPendingCommunityRequests = async (req, res) => {
+  try {
+    const communities = await Community.find({
+      admins: req.user.id,
+      pendingRequests: { $exists: true, $not: { $size: 0 } }
+    })
+      .select('name pendingRequests slug')
+      .populate('pendingRequests', 'name profilePicUrl')
+      .lean();
+
+    // Flatten logic if needed, or return grouped
+    return res.json({ communities });
+  } catch (err) {
+    console.error('getPendingCommunityRequests error', err);
     return res.status(500).json({ msg: 'Server error' });
   }
 };

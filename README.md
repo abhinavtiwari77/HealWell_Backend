@@ -279,10 +279,6 @@ HTTP Status Codes:
 - Sanitize user inputs
 - Use prepared statements/parameterized queries
 
-## 📄 License
-
-This project is licensed under the ISC License.
-
 ## 👨‍💻 Author
 
 **Abhinav Tiwari** - [@abhinavtiwari77](https://github.com/abhinavtiwari77)
@@ -294,11 +290,5 @@ This project is licensed under the ISC License.
 - Socket.IO for real-time capabilities
 - Cloudinary for media management
 - All contributors and supporters
-
-## 📞 Support
-
-For support, email echoabhinav@example.com or open an issue in the repository.
-
----
 
 **Note**: This is an active project under development. Features and documentation are subject to change.

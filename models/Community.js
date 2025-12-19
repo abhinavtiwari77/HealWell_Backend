@@ -31,4 +31,4 @@ const CommunitySchema = new mongoose.Schema({
   createdAt: { type: Date, default: Date.now }
 });
 
-module.exports = mongoose.model('Community', CommunitySchema);
+module.exports = mongoose.models.Community || mongoose.model('Community', CommunitySchema);

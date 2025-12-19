@@ -10,4 +10,4 @@ const CommentSchema = new mongoose.Schema({
 CommentSchema.set('toJSON', { virtuals: true });
 CommentSchema.set('toObject', { virtuals: true });
 
-module.exports = mongoose.model('Comment', CommentSchema);
+module.exports = mongoose.models.Comment || mongoose.model('Comment', CommentSchema);

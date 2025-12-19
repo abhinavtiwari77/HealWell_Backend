@@ -34,12 +34,25 @@ exports.updateMyProfile = async (req, res) => {
 
     if (name) updates.name = String(name).trim();
     if (bio !== undefined) updates.bio = bio;
+    if (req.body.location !== undefined) updates.location = req.body.location;
+    if (req.body.phone !== undefined) updates.phone = req.body.phone;
     if (profilePicUrl !== undefined) updates.profilePicUrl = profilePicUrl; // possibly external URL
 
     if (interests) {
       updates.interests = Array.isArray(interests)
         ? interests
         : String(interests).split(",").map((i) => i.trim()).filter(Boolean);
+    }
+
+    if (req.body.notificationPreferences) {
+      let prefs = req.body.notificationPreferences;
+      if (typeof prefs === 'string') {
+        try { prefs = JSON.parse(prefs); } catch (e) { }
+      }
+      updates.notificationPreferences = {
+        ...userExisting.notificationPreferences,
+        ...prefs
+      };
     }
 
     if (password) {
@@ -94,9 +107,11 @@ exports.searchUsers = async (req, res) => {
 
     const filter = {};
     if (q) {
+      // Escape special characters for regex
+      const escapedQ = q.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
       filter.$or = [
-        { name: { $regex: q, $options: "i" } },
-        { email: { $regex: q, $options: "i" } }
+        { name: { $regex: escapedQ, $options: "i" } },
+        { email: { $regex: escapedQ, $options: "i" } }
       ];
     }
     const users = await User.find(filter).select("name email profilePicUrl bio").limit(limit).lean();
@@ -117,28 +132,176 @@ exports.toggleFollow = async (req, res) => {
     const targetUser = await User.findById(targetId);
     if (!targetUser) return res.status(404).json({ msg: "User not found" });
 
-    targetUser.followers = targetUser.followers || [];
     const me = await User.findById(meId);
+
+    // Ensure arrays exist
+    targetUser.followers = targetUser.followers || [];
+    targetUser.followRequests = targetUser.followRequests || [];
     me.following = me.following || [];
+    me.sentRequests = me.sentRequests || [];
 
-    const alreadyFollowing = targetUser.followers.some((id) => id.toString() === meId);
+    const isFollowing = targetUser.followers.some(id => id.toString() === meId);
+    const isRequested = targetUser.followRequests.some(id => id.toString() === meId);
 
-    if (alreadyFollowing) {
-      // remove
-      targetUser.followers = targetUser.followers.filter((id) => id.toString() !== meId);
-      me.following = me.following.filter((id) => id.toString() !== targetId);
+    if (isFollowing) {
+      // Unfollow
+      targetUser.followers = targetUser.followers.filter(id => id.toString() !== meId);
+      me.following = me.following.filter(id => id.toString() !== targetId);
+      await targetUser.save();
+      await me.save();
+      return res.json({ status: 'unfollowed', msg: 'Unfollowed user' });
+    } else if (isRequested) {
+      // Cancel request
+      targetUser.followRequests = targetUser.followRequests.filter(id => id.toString() !== meId);
+      me.sentRequests = me.sentRequests.filter(id => id.toString() !== targetId);
+      await targetUser.save();
+      await me.save();
+      return res.json({ status: 'cancelled', msg: 'Follow request cancelled' });
     } else {
-      // add
-      targetUser.followers.push(meId);
-      me.following.push(targetId);
+      // Send request
+      targetUser.followRequests.push(meId);
+      me.sentRequests.push(targetId);
+      await targetUser.save();
+      await me.save();
+      return res.json({ status: 'requested', msg: 'Follow request sent' });
     }
-
-    await targetUser.save();
-    await me.save();
-
-    return res.json({ followed: !alreadyFollowing });
   } catch (err) {
     console.error("toggleFollow error", err);
+    return res.status(500).json({ msg: "Server error" });
+  }
+};
+
+exports.acceptFollowRequest = async (req, res) => {
+  try {
+    const requesterId = req.params.id;
+    const meId = req.user.id; // I am the one accepting
+
+    const me = await User.findById(meId);
+    const requester = await User.findById(requesterId);
+
+    if (!requester) return res.status(404).json({ msg: "User not found" });
+
+    // Check if request exists
+    if (!me.followRequests.some(id => id.toString() === requesterId)) {
+      return res.status(400).json({ msg: "No follow request from this user" });
+    }
+
+    // Move from requests to followers
+    me.followRequests = me.followRequests.filter(id => id.toString() !== requesterId);
+    me.followers.push(requesterId);
+
+    // Update requester's following and sentRequests
+    requester.sentRequests = requester.sentRequests.filter(id => id.toString() !== meId);
+    requester.following.push(meId);
+
+    await me.save();
+    await requester.save();
+
+    return res.json({ msg: "Request accepted" });
+  } catch (err) {
+    console.error("acceptFollowRequest error", err);
+    return res.status(500).json({ msg: "Server error" });
+  }
+};
+
+exports.rejectFollowRequest = async (req, res) => {
+  try {
+    const requesterId = req.params.id;
+    const meId = req.user.id;
+
+    const me = await User.findById(meId);
+    const requester = await User.findById(requesterId);
+
+    if (!requester) return res.status(404).json({ msg: "User not found" });
+
+    // Remove from requests
+    me.followRequests = me.followRequests.filter(id => id.toString() !== requesterId);
+
+    // Remove from requester's sentRequests
+    requester.sentRequests = requester.sentRequests.filter(id => id.toString() !== meId);
+
+    await me.save();
+    await requester.save();
+
+    return res.json({ msg: "Request rejected" });
+  } catch (err) {
+    console.error("rejectFollowRequest error", err);
+    return res.status(500).json({ msg: "Server error" });
+  }
+};
+
+exports.getFollowRequests = async (req, res) => {
+  try {
+    const me = await User.findById(req.user.id)
+      .populate('followRequests', 'name profilePicUrl bio')
+      .lean();
+
+    return res.json({ requests: me.followRequests || [] });
+  } catch (err) {
+    console.error("getFollowRequests error", err);
+    return res.status(500).json({ msg: "Server error" });
+  }
+};
+
+exports.toggleFavorite = async (req, res) => {
+  try {
+    const postId = req.params.postId;
+    const user = await User.findById(req.user.id);
+
+    if (!user) return res.status(404).json({ msg: "User not found" });
+
+    // Ensure favorites array exists
+    user.favorites = user.favorites || [];
+
+    const index = user.favorites.findIndex(id => id.toString() === postId);
+    let isFavorited = false;
+
+    if (index === -1) {
+      user.favorites.push(postId);
+      isFavorited = true;
+    } else {
+      user.favorites.splice(index, 1);
+      isFavorited = false;
+    }
+
+    await user.save();
+    return res.json({ isFavorited, favorites: user.favorites });
+  } catch (err) {
+    console.error("toggleFavorite error", err);
+    return res.status(500).json({ msg: "Server error" });
+  }
+};
+
+exports.getFavorites = async (req, res) => {
+  try {
+    const user = await User.findById(req.user.id).populate({
+      path: 'favorites',
+      populate: { path: 'author', select: 'name profilePicUrl' }
+    }).lean();
+
+    if (!user) return res.status(404).json({ msg: "User not found" });
+
+    // Filter out nulls (deleted posts)
+    const favorites = (user.favorites || []).filter(post => post !== null);
+    return res.json({ favorites });
+  } catch (err) {
+    console.error("getFavorites error", err);
+    return res.status(500).json({ msg: "Server error" });
+  }
+};
+
+exports.getUserConnections = async (req, res) => {
+  try {
+    const userId = req.params.id || req.user.id;
+    const type = req.query.type || 'followers'; // 'followers' or 'following'
+
+    const user = await User.findById(userId).populate(type, 'name profilePicUrl bio').lean();
+
+    if (!user) return res.status(404).json({ msg: "User not found" });
+
+    return res.json({ users: user[type] || [] });
+  } catch (err) {
+    console.error("getUserConnections error", err);
     return res.status(500).json({ msg: "Server error" });
   }
 };

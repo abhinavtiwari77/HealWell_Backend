@@ -9,6 +9,7 @@ const communityRoutes = require('./routes/communityRoutes');
 const commentRoutes = require('./routes/CommentRoutes');
 const messageRoutes = require('./routes/messageRoutes');
 const uploadRoutes = require('./routes/uploadRoutes');
+const notificationRoutes = require('./routes/notificationRoutes');
 
 const app = express();
 
@@ -17,21 +18,23 @@ app.use(express.json());
 
 connectDB();
 
-app.use('/api/auth',authRoutes);
-app.use('/api/posts',postRoutes);
-app.use('/api/user',userRoutes);
+app.use('/api/auth', authRoutes);
+app.use('/api/posts', postRoutes);
+app.use('/api/user', userRoutes);
 app.use('/api/communities', communityRoutes);
 app.use('/api', commentRoutes);
 app.use('/api/messages', messageRoutes);
 app.use('/api/upload', uploadRoutes);
+app.use('/api/notifications', notificationRoutes);
+app.use('/api/stories', require('./routes/storyRoutes'));
 
-app.get('/',(req,res)=> res.send("Wellness api running"));
+app.get('/', (req, res) => res.send("Wellness api running"));
 
-app.use((err,req,res,next)=>{
-    console.error(err);
-    res.status(err.status || 500).json({
-        error:err.message || "Internal Server error"
-    });
+app.use((err, req, res, next) => {
+  console.error(err);
+  res.status(err.status || 500).json({
+    error: err.message || "Internal Server error"
+  });
 });
 
 const PORT = process.env.PORT || 3000;
@@ -43,20 +46,32 @@ const server = http.createServer(app);
 const { Server } = require('socket.io');
 const io = new Server(server, {
   cors: {
-    origin: '*' 
+    origin: '*'
   }
 });
 
 app.locals.io = io;
 
+const onlineUsers = new Map();
+
 io.on('connection', (socket) => {
-  console.log('Socket connected:', socket.id);
+  // console.log('Socket connected:', socket.id);
+  const userId = socket.handshake.query.userId;
+
+  if (userId && userId !== "undefined") {
+    onlineUsers.set(userId, socket.id);
+    socket.join(userId); // Join a room for this user
+    io.emit('getOnlineUsers', Array.from(onlineUsers.keys()));
+  }
+
+  // Regular conversation handling
   socket.on('joinConversation', (conversationId) => {
     if (conversationId) {
       socket.join(String(conversationId));
       socket.emit('joinedConversation', { conversationId });
     }
   });
+
   socket.on('leaveConversation', (conversationId) => {
     if (conversationId) socket.leave(String(conversationId));
   });
@@ -68,10 +83,53 @@ io.on('connection', (socket) => {
     }
   });
 
+  // Typing indicators
+  socket.on('typing', ({ conversationId, typistId }) => {
+    if (conversationId && typistId) {
+      socket.to(String(conversationId)).emit('typing', { conversationId, typistId });
+    }
+  });
+
+  socket.on('stopTyping', ({ conversationId, typistId }) => {
+    if (conversationId && typistId) {
+      socket.to(String(conversationId)).emit('stopTyping', { conversationId, typistId });
+    }
+  });
+
+  // Community chat handling
+  socket.on('joinCommunity', (communityId) => {
+    if (communityId) {
+      const roomName = `community-${communityId}`;
+      socket.join(roomName);
+      // console.log(`Socket ${socket.id} joined community room: ${roomName}`);
+    }
+  });
+
+  socket.on('leaveCommunity', (communityId) => {
+    if (communityId) {
+      const roomName = `community-${communityId}`;
+      socket.leave(roomName);
+      // console.log(`Socket ${socket.id} left community room: ${roomName}`);
+    }
+  });
+
+  socket.on('sendCommunityMessage', (payload) => {
+    const { communityId, message } = payload || {};
+    if (communityId && message) {
+      const roomName = `community-${communityId}`;
+      io.to(roomName).emit('communityMessage', message);
+      // console.log(`Message sent to community room: ${roomName}`);
+    }
+  });
+
   socket.on('disconnect', () => {
-    console.log('Socket disconnected', socket.id);
+    // console.log('Socket disconnected', socket.id);
+    if (userId && onlineUsers.get(userId) === socket.id) {
+      onlineUsers.delete(userId);
+      io.emit('getOnlineUsers', Array.from(onlineUsers.keys()));
+    }
   });
 });
 server.listen(PORT, () => {
-    console.log(`Server listening on PORT ${PORT} (with Socket.IO)`);
+  console.log(`Server listening on PORT ${PORT} (with Socket.IO)`);
 });
